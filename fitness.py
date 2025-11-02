@@ -3,9 +3,11 @@ import streamlit as st
 import groq
 import pandas as pd
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import re
+import plotly.graph_objects as go
+import plotly.express as px
 
 
 # Load environment variables from .env file
@@ -169,6 +171,143 @@ def parse_meal_to_table(meal_text):
     
     return pd.DataFrame(days) if days else None
 
+def get_pakistan_season():
+    """Determine current season in Pakistan"""
+    month = datetime.now().month
+    
+    if month in [12, 1, 2]:
+        return "Winter", "Cool weather, perfect for outdoor activities. Focus on warming foods."
+    elif month in [3, 4, 5]:
+        return "Spring", "Pleasant weather transitioning to heat. Include hydrating foods and seasonal fruits."
+    elif month in [6, 7, 8, 9]:
+        return "Summer/Monsoon", "Hot and humid weather. Focus on cooling foods, hydration, and indoor exercises."
+    elif month in [10, 11]:
+        return "Autumn", "Moderate weather. Great for outdoor workouts and balanced nutrition."
+    
+def get_seasonal_foods_pakistan():
+    """Get seasonal foods available in Pakistan"""
+    month = datetime.now().month
+    
+    seasonal_foods = {
+        "Winter (Dec-Feb)": {
+            "fruits": "Oranges (Malta), Guava (Amrood), Strawberries, Apples, Pomegranate (Anar)",
+            "vegetables": "Carrots (Gajar), Turnips (Shalgam), Cauliflower (Phool Gobi), Peas (Matar), Spinach (Palak)",
+            "special": "Gajar ka Halwa, Sarson ka Saag, warm Daal, Nihari, Paye"
+        },
+        "Spring (Mar-May)": {
+            "fruits": "Mangoes (starting May), Loquat (Lokat), Melons (Kharbooza), Strawberries",
+            "vegetables": "Bitter Gourd (Karela), Bottle Gourd (Lauki), Cucumbers (Kheera), Tomatoes",
+            "special": "Fresh salads, lighter curries, grilled items, fresh juices"
+        },
+        "Summer/Monsoon (Jun-Sep)": {
+            "fruits": "Mangoes (Chaunsa, Sindhri, Anwar Ratol), Watermelon (Tarbooz), Muskmelon, Plums (Aloo Bukhara)",
+            "vegetables": "Okra (Bhindi), Eggplant (Baingan), Tomatoes, Chilies, Gourds",
+            "special": "Lassi, Rooh Afza, fresh juices, light curries, salads, raita"
+        },
+        "Autumn (Oct-Nov)": {
+            "fruits": "Guava (Amrood), Pomegranate (Anar), Persimmon (Amlok), Dates",
+            "vegetables": "Pumpkin (Kaddu), Eggplant, Spinach, Fenugreek (Methi)",
+            "special": "Mixed vegetable curries, moderate portions, balanced meals"
+        }
+    }
+    
+    if month in [12, 1, 2]:
+        return seasonal_foods["Winter (Dec-Feb)"]
+    elif month in [3, 4, 5]:
+        return seasonal_foods["Spring (Mar-May)"]
+    elif month in [6, 7, 8, 9]:
+        return seasonal_foods["Summer/Monsoon (Jun-Sep)"]
+    else:
+        return seasonal_foods["Autumn (Oct-Nov)"]
+
+def calculate_projections(weight, height, fitness_goal, weeks=12):
+    """Calculate weight and fitness projections for next few months"""
+    projections = []
+    current_weight = weight
+    height_m = height / 100
+    
+    # Define weight change rates based on goal (kg per week)
+    weight_change_rates = {
+        "Weight Loss": -0.5,  # Safe weight loss
+        "Muscle Gain": 0.25,  # Muscle gain with minimal fat
+        "Increase Upper Body Width": 0.15,  # Focused muscle gain
+        "General Fitness": 0,  # Maintenance
+        "Endurance": -0.1,  # Slight weight optimization
+        "Flexibility & Mobility": 0,  # Maintenance
+        "Maintenance": 0
+    }
+    
+    rate = weight_change_rates.get(fitness_goal, 0)
+    
+    for week in range(weeks + 1):
+        date = datetime.now() + timedelta(weeks=week)
+        projected_weight = current_weight + (rate * week)
+        projected_bmi = projected_weight / (height_m ** 2)
+        
+        projections.append({
+            'Week': week,
+            'Date': date.strftime('%b %d'),
+            'Weight': round(projected_weight, 1),
+            'BMI': round(projected_bmi, 1),
+            'Change': round(rate * week, 1)
+        })
+    
+    return pd.DataFrame(projections)
+
+def create_projection_charts(projections_df, fitness_goal):
+    """Create interactive projection charts"""
+    # Weight projection chart
+    fig_weight = go.Figure()
+    
+    fig_weight.add_trace(go.Scatter(
+        x=projections_df['Date'],
+        y=projections_df['Weight'],
+        mode='lines+markers',
+        name='Projected Weight',
+        line=dict(color='#2E8B57', width=3),
+        marker=dict(size=8),
+        hovertemplate='<b>Date:</b> %{x}<br><b>Weight:</b> %{y} kg<extra></extra>'
+    ))
+    
+    fig_weight.update_layout(
+        title=f'📈 Weight Projection - {fitness_goal}',
+        xaxis_title='Timeline',
+        yaxis_title='Weight (kg)',
+        hovermode='x unified',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=400
+    )
+    
+    # BMI projection chart
+    fig_bmi = go.Figure()
+    
+    fig_bmi.add_trace(go.Scatter(
+        x=projections_df['Date'],
+        y=projections_df['BMI'],
+        mode='lines+markers',
+        name='Projected BMI',
+        line=dict(color='#FF6347', width=3),
+        marker=dict(size=8),
+        hovertemplate='<b>Date:</b> %{x}<br><b>BMI:</b> %{y}<extra></extra>'
+    ))
+    
+    # Add BMI category zones
+    fig_bmi.add_hrect(y0=18.5, y1=25, fillcolor="green", opacity=0.1, line_width=0, annotation_text="Normal")
+    fig_bmi.add_hrect(y0=25, y1=30, fillcolor="orange", opacity=0.1, line_width=0, annotation_text="Overweight")
+    
+    fig_bmi.update_layout(
+        title='📊 BMI Projection Trend',
+        xaxis_title='Timeline',
+        yaxis_title='BMI',
+        hovermode='x unified',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=400
+    )
+    
+    return fig_weight, fig_bmi
+
 # Function to generate a personalized fitness and meal plan using Groq API
 def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fitness_goal, exercise_time, health_metrics):
     try:
@@ -177,6 +316,10 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
         # propagate a concise error to the caller (Streamlit will show it)
         raise RuntimeError(str(e))
 
+    # Get current season and seasonal foods
+    season_name, season_desc = get_pakistan_season()
+    seasonal_foods = get_seasonal_foods_pakistan()
+    
     # Enhanced prompts with Pakistani context
     workout_prompt = f"""
     Generate a detailed week-long workout plan for a {age}-year-old {gender} from Pakistan who wants to achieve: {fitness_goal}.
@@ -187,6 +330,9 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     - BMI: {health_metrics['bmi']} ({health_metrics['bmi_category']})
     - Available time: {exercise_time} minutes daily
     - Fitness Goal: {fitness_goal}
+    
+    Current Season in Pakistan: {season_name}
+    Season Note: {season_desc}
     
     IMPORTANT: Format your response EXACTLY as follows for each day:
     
@@ -206,7 +352,7 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     
     Create a comprehensive workout plan considering:
     1. Limited access to gym equipment (provide home workout alternatives)
-    2. Hot weather conditions in Pakistan (suggest indoor/early morning workouts)
+    2. {season_desc}
     3. Progressive difficulty throughout the week
     4. Proper warm-up and cool-down exercises
     5. Rest days for recovery
@@ -224,13 +370,21 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     - Fitness Goal: {fitness_goal}
     - Diet Preference: {diet_pref}
     
+    CURRENT SEASON IN PAKISTAN: {season_name}
+    {season_desc}
+    
+    SEASONAL FOODS AVAILABLE NOW:
+    🍎 Fruits: {seasonal_foods['fruits']}
+    🥬 Vegetables: {seasonal_foods['vegetables']}
+    🍲 Special Items: {seasonal_foods['special']}
+    
     IMPORTANT: Format your response EXACTLY as follows for each day:
     
     Day 1:
-    Breakfast: [Complete breakfast with portions and calories]
-    Lunch: [Complete lunch with portions and calories]
-    Dinner: [Complete dinner with portions and calories]
-    Snacks: [Snacks/beverages throughout the day]
+    Breakfast: [Complete breakfast with portions and calories using SEASONAL ingredients]
+    Lunch: [Complete lunch with portions and calories using SEASONAL ingredients]
+    Dinner: [Complete dinner with portions and calories using SEASONAL ingredients]
+    Snacks: [Snacks/beverages using SEASONAL ingredients]
     
     Day 2:
     Breakfast: [meal details]
@@ -242,30 +396,32 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     
     Create authentic Pakistani meal plans with:
     
-    1. TRADITIONAL PAKISTANI FOODS:
+    1. PRIORITIZE SEASONAL FOODS listed above - they are fresh, affordable, and nutritious right now!
+    
+    2. TRADITIONAL PAKISTANI FOODS:
     - Breakfast: Paratha, eggs, daal, halwa puri, nihari, channay, lassi, doodh patti chai
     - Lunch: Roti/naan with saalan (chicken karahi, mutton korma, daal, biryani, pulao)
     - Dinner: Similar to lunch but lighter portions
-    - Snacks: Fruit chaat, samosas, pakoras, nuts, dates, roasted chana
+    - Snacks: Fruit chaat (with seasonal fruits), nuts, dates, roasted chana
     
-    2. NUTRITIONAL BALANCE:
+    3. NUTRITIONAL BALANCE:
     - Include protein sources (chicken, mutton, fish, daal, eggs, dairy)
     - Complex carbs (brown rice, whole wheat roti, oats)
     - Healthy fats (desi ghee in moderation, nuts, olive oil)
-    - Fresh vegetables and seasonal Pakistani fruits
+    - EMPHASIZE seasonal vegetables and fruits from the list above
     
-    3. CULTURAL CONSIDERATIONS:
+    4. CULTURAL CONSIDERATIONS:
     - All foods must be Halal
     - Use common Pakistani spices and cooking methods
-    - Suggest locally available ingredients
+    - Suggest locally available ingredients (especially seasonal ones)
     - Consider meal timing (breakfast, lunch, evening chai, dinner)
     
-    4. PORTION CONTROL:
+    5. PORTION CONTROL:
     - Specify serving sizes (rotis, cups, grams)
     - Calorie estimates for each meal
     
     Adjust portions and recipes based on the fitness goal: {fitness_goal}
-    Make it delicious, practical, and aligned with Pakistani eating habits!
+    Make it delicious, practical, seasonal, and aligned with Pakistani eating habits!
     """
 
     # Call the chat completion API and handle common errors
@@ -516,7 +672,7 @@ def main():
         st.markdown("---")
         
         # Create tabs for better organization
-        tab1, tab2, tab3 = st.tabs(["💪 Workout Plan", "🥘 Meal Plan", "📊 Summary"])
+        tab1, tab2, tab3, tab4 = st.tabs(["💪 Workout Plan", "🥘 Meal Plan", "� Projections", "�📊 Summary"])
         
         with tab1:
             st.subheader("Your Personalized Workout Plan")
@@ -545,6 +701,20 @@ def main():
         with tab2:
             st.subheader("Your Personalized Meal Plan")
             
+            # Display current season info
+            season_name, season_desc = get_pakistan_season()
+            seasonal_foods = get_seasonal_foods_pakistan()
+            
+            st.info(f"🌤️ **Current Season:** {season_name} - {season_desc}")
+            
+            with st.expander("🍎 Seasonal Foods in Pakistan Right Now"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**🍎 Fruits:**\n{seasonal_foods['fruits']}")
+                    st.markdown(f"**🥬 Vegetables:**\n{seasonal_foods['vegetables']}")
+                with col2:
+                    st.markdown(f"**🍲 Special Items:**\n{seasonal_foods['special']}")
+            
             # Try to parse and display as table
             meal_df = parse_meal_to_table(st.session_state['meal_plan'])
             
@@ -567,6 +737,49 @@ def main():
             )
         
         with tab3:
+            st.subheader("📈 Your Progress Projections (Next 3 Months)")
+            
+            # Calculate projections
+            projections_df = calculate_projections(weight, height, fitness_goal, weeks=12)
+            
+            # Create and display charts
+            fig_weight, fig_bmi = create_projection_charts(projections_df, fitness_goal)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.plotly_chart(fig_weight, use_container_width=True)
+            with col2:
+                st.plotly_chart(fig_bmi, use_container_width=True)
+            
+            # Display projection table
+            st.markdown("### 📋 Detailed Projections")
+            
+            # Show milestones (every 4 weeks)
+            milestones = projections_df[projections_df['Week'] % 4 == 0].copy()
+            milestones['Month'] = ['Start', '1 Month', '2 Months', '3 Months']
+            
+            st.dataframe(
+                milestones[['Month', 'Date', 'Weight', 'BMI', 'Change']],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Insights
+            st.markdown("### 💡 Projection Insights")
+            
+            final_weight = projections_df.iloc[-1]['Weight']
+            total_change = projections_df.iloc[-1]['Change']
+            
+            if total_change < 0:
+                st.success(f"✅ Expected to lose **{abs(total_change)} kg** in 3 months with consistent effort!")
+            elif total_change > 0:
+                st.success(f"✅ Expected to gain **{total_change} kg** of lean muscle in 3 months!")
+            else:
+                st.info("✅ Focus on maintaining your current weight while improving fitness!")
+            
+            st.warning("⚠️ **Note:** These are projected trends based on consistent adherence to your workout and meal plan. Actual results may vary based on genetics, consistency, and other factors.")
+        
+        with tab4:
             st.subheader("📊 Your Profile Summary")
             
             col1, col2, col3 = st.columns(3)
