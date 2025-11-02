@@ -1,6 +1,6 @@
 import os
 import streamlit as st
-from groq import Groq
+import groq
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -8,11 +8,47 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-api_key = os.getenv("fitness")
+# Prefer Streamlit secrets, then environment variables (.env or environment). Do not hardcode secrets in source.
+api_key = None
+try:
+    # Streamlit stores secrets in st.secrets when deployed to Streamlit Cloud or when using a secrets.toml
+    api_key = st.secrets.get("GROQ_API_KEY") if hasattr(st, "secrets") else None
+except Exception:
+    api_key = None
+
+if not api_key:
+    api_key = os.getenv("fitness") or os.getenv("FITNESS") or os.getenv("GROQ_API_KEY")
+
+
+def _get_groq_client(key: str):
+    """Return a groq client instance or raise a RuntimeError on failure."""
+    if not key:
+        raise RuntimeError("Groq API key not provided")
+
+    # Prefer the modern Client API if available
+    client = None
+    try:
+        client = groq.Client(api_key=key)
+        return client
+    except Exception:
+        # Fallback: some older/newer SDKs may expose a different constructor
+        try:
+            # try attribute style if present (keeps compatibility with different SDKs)
+            GroqClass = getattr(groq, "Groq", None)
+            if GroqClass:
+                return GroqClass(api_key=key)
+        except Exception:
+            pass
+
+    raise RuntimeError("Unable to initialize Groq client. Check installed groq SDK and API key.")
 
 # Function to generate a personalized fitness and meal plan using Groq API
 def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fitness_goal, exercise_time):
-    client = Groq(api_key=api_key)  # Initialize Groq client with the provided API key
+    try:
+        client = _get_groq_client(api_key)
+    except Exception as e:
+        # propagate a concise error to the caller (Streamlit will show it)
+        raise RuntimeError(str(e))
 
     workout_prompt = f"""
     Generate a detailed week-long workout plan for a {age}-year-old {gender} who wants to increase upper body width by {fitness_goal} and has {exercise_time} minutes daily for exercise. Focus on exercises that build shoulders, chest, and back muscles.
@@ -38,17 +74,62 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     Day 7: Breakfast, Lunch, Dinner, Snacks
     """
 
-    workout_plan = client.chat.completions.create(
-        messages=[{"role": "user", "content": workout_prompt}],
-        model="llama3-8b-8192",
-    )
+    # Call the chat completion API and handle common errors
+    AuthErr = getattr(groq, "AuthenticationError", Exception)
+    try:
+        workout_plan = client.chat.completions.create(
+            messages=[{"role": "user", "content": workout_prompt}],
+            model="llama-3.1-8b-instant",
+        )
 
-    meal_plan = client.chat.completions.create(
-        messages=[{"role": "user", "content": meal_prompt}],
-        model="llama3-8b-8192",
-    )
+        meal_plan = client.chat.completions.create(
+            messages=[{"role": "user", "content": meal_prompt}],
+            model="llama-3.1-8b-instant",
+        )
+    except AuthErr:
+        raise RuntimeError("Authentication failed: invalid or expired Groq API key. Rotate the key and update your environment.")
+    except AttributeError:
+        raise RuntimeError("Groq client does not expose the expected chat API. Confirm SDK version.")
+    except Exception as e:
+        # surface a short message and let logs contain details
+        raise RuntimeError(f"Groq API call failed: {e}")
 
-    return workout_plan.choices[0].message.content, meal_plan.choices[0].message.content
+    # Extract text safely
+    try:
+        w = workout_plan.choices[0].message.content
+    except Exception:
+        w = str(workout_plan)
+    try:
+        m = meal_plan.choices[0].message.content
+    except Exception:
+        m = str(meal_plan)
+
+    return w, m
+
+
+def chatbot_response(api_key: str, user_input: str) -> str:
+    """Simple chatbot fallback using the same Groq chat completions endpoint."""
+    if not user_input:
+        return "Please enter a message."
+    try:
+        client = _get_groq_client(api_key)
+    except Exception as e:
+        return f"Chat unavailable: {e}"
+
+    AuthErr = getattr(groq, "AuthenticationError", Exception)
+    try:
+        resp = client.chat.completions.create(
+            messages=[{"role": "user", "content": user_input}],
+            model="llama-3.1-8b-instant",
+        )
+        try:
+            return resp.choices[0].message.content
+        except Exception:
+            return str(resp)
+    except AuthErr:
+        return "Authentication failed for chat: invalid or expired API key."
+    except Exception as e:
+        return f"Chat error: {e}"
 
 # Streamlit app
 def main():
@@ -82,6 +163,13 @@ def main():
 
     # Add the title image
     st.image("titlepage.jpeg", use_column_width=True)
+
+    # Show a clear message if the API key is not available
+    if not api_key:
+        st.error(
+            "Groq API key not found. Set it in your environment (.env) using one of: 'fitness', 'FITNESS', or 'GROQ_API_KEY',\n"
+            "or add 'GROQ_API_KEY' to Streamlit secrets. The app cannot call the Groq API without this key."
+        )
 
     st.markdown(
         """
