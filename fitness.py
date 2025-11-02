@@ -5,6 +5,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime
 import json
+import re
 
 
 # Load environment variables from .env file
@@ -81,6 +82,93 @@ def calculate_health_metrics(weight, height, age, gender):
         "calories_maintenance": round(calories_maintenance, 0)
     }
 
+def parse_workout_to_table(workout_text):
+    """Parse workout plan text into a structured table format"""
+    days = []
+    current_day = None
+    current_content = []
+    
+    lines = workout_text.split('\n')
+    
+    for line in lines:
+        # Check if line starts with "Day" followed by a number
+        if re.match(r'^Day\s*\d+', line, re.IGNORECASE):
+            # Save previous day if exists
+            if current_day:
+                days.append({
+                    'Day': current_day,
+                    'Workout Details': '\n'.join(current_content)
+                })
+            
+            # Start new day
+            current_day = line.strip()
+            current_content = []
+        elif line.strip() and current_day:
+            current_content.append(line.strip())
+    
+    # Add last day
+    if current_day and current_content:
+        days.append({
+            'Day': current_day,
+            'Workout Details': '\n'.join(current_content)
+        })
+    
+    return pd.DataFrame(days) if days else None
+
+def parse_meal_to_table(meal_text):
+    """Parse meal plan text into a structured table format"""
+    days = []
+    current_day = None
+    meals = {'Breakfast': '', 'Lunch': '', 'Dinner': '', 'Snacks': ''}
+    
+    lines = meal_text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Check if line starts with "Day" followed by a number
+        if re.match(r'^Day\s*\d+', line, re.IGNORECASE):
+            # Save previous day if exists
+            if current_day:
+                days.append({
+                    'Day': current_day,
+                    'Breakfast': meals.get('Breakfast', ''),
+                    'Lunch': meals.get('Lunch', ''),
+                    'Dinner': meals.get('Dinner', ''),
+                    'Snacks': meals.get('Snacks', '')
+                })
+            
+            # Start new day
+            current_day = line
+            meals = {'Breakfast': '', 'Lunch': '', 'Dinner': '', 'Snacks': ''}
+        
+        # Check for meal types
+        elif any(meal_type in line.lower() for meal_type in ['breakfast', 'lunch', 'dinner', 'snack']):
+            for meal_type in ['Breakfast', 'Lunch', 'Dinner', 'Snacks']:
+                if meal_type.lower() in line.lower():
+                    # Extract meal content after the meal type
+                    meal_content = re.sub(r'.*?'+meal_type+r'\s*:?\s*', '', line, flags=re.IGNORECASE)
+                    meals[meal_type] = meal_content
+                    break
+        elif current_day and line:
+            # Add to the last meal type
+            for meal_type in reversed(['Breakfast', 'Lunch', 'Dinner', 'Snacks']):
+                if meals[meal_type]:
+                    meals[meal_type] += ' ' + line
+                    break
+    
+    # Add last day
+    if current_day:
+        days.append({
+            'Day': current_day,
+            'Breakfast': meals.get('Breakfast', ''),
+            'Lunch': meals.get('Lunch', ''),
+            'Dinner': meals.get('Dinner', ''),
+            'Snacks': meals.get('Snacks', '')
+        })
+    
+    return pd.DataFrame(days) if days else None
+
 # Function to generate a personalized fitness and meal plan using Groq API
 def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fitness_goal, exercise_time, health_metrics):
     try:
@@ -100,19 +188,28 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     - Available time: {exercise_time} minutes daily
     - Fitness Goal: {fitness_goal}
     
+    IMPORTANT: Format your response EXACTLY as follows for each day:
+    
+    Day 1: [Day Name, e.g., Monday - Chest & Triceps]
+    Warm-up: [5-10 min warm-up exercises]
+    Main Workout:
+    - Exercise 1: Sets x Reps (Rest time)
+    - Exercise 2: Sets x Reps (Rest time)
+    - Exercise 3: Sets x Reps (Rest time)
+    Cool-down: [Stretching exercises]
+    Calories Burned: ~XXX kcal
+    
+    Day 2: [Day Name]
+    [Same format]
+    
+    Continue for all 7 days.
+    
     Create a comprehensive workout plan considering:
     1. Limited access to gym equipment (provide home workout alternatives)
     2. Hot weather conditions in Pakistan (suggest indoor/early morning workouts)
     3. Progressive difficulty throughout the week
     4. Proper warm-up and cool-down exercises
     5. Rest days for recovery
-    
-    Format each day clearly with:
-    - Warm-up (5-10 minutes)
-    - Main exercises (with sets, reps, and rest periods)
-    - Cool-down and stretching
-    - Alternative exercises if equipment is not available
-    - Estimated calories burned
     
     Make it practical, achievable, and culturally appropriate for Pakistan.
     """
@@ -126,6 +223,22 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     - Daily calorie target: ~{health_metrics['calories_maintenance']} kcal (for maintenance)
     - Fitness Goal: {fitness_goal}
     - Diet Preference: {diet_pref}
+    
+    IMPORTANT: Format your response EXACTLY as follows for each day:
+    
+    Day 1:
+    Breakfast: [Complete breakfast with portions and calories]
+    Lunch: [Complete lunch with portions and calories]
+    Dinner: [Complete dinner with portions and calories]
+    Snacks: [Snacks/beverages throughout the day]
+    
+    Day 2:
+    Breakfast: [meal details]
+    Lunch: [meal details]
+    Dinner: [meal details]
+    Snacks: [snack details]
+    
+    Continue for all 7 days.
     
     Create authentic Pakistani meal plans with:
     
@@ -146,19 +259,10 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     - Use common Pakistani spices and cooking methods
     - Suggest locally available ingredients
     - Consider meal timing (breakfast, lunch, evening chai, dinner)
-    - Include hydration tips for Pakistani climate
     
     4. PORTION CONTROL:
     - Specify serving sizes (rotis, cups, grams)
     - Calorie estimates for each meal
-    - Total daily calorie count
-    
-    For each day provide:
-    - Sehri/Breakfast (6-8 AM)
-    - Mid-morning snack (optional)
-    - Lunch (1-2 PM)
-    - Evening Chai/Snack (5-6 PM)
-    - Dinner (8-9 PM)
     
     Adjust portions and recipes based on the fitness goal: {fitness_goal}
     Make it delicious, practical, and aligned with Pakistani eating habits!
@@ -199,8 +303,8 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     return w, m
 
 
-def chatbot_response(api_key: str, user_input: str, user_context: dict = None) -> str:
-    """Enhanced chatbot with context awareness about user profile and generated plans."""
+def chatbot_response(api_key: str, user_input: str, chat_history: list = None, user_context: dict = None) -> str:
+    """Enhanced chatbot with conversation history and context awareness."""
     if not user_input:
         return "Please enter a message."
     try:
@@ -208,30 +312,47 @@ def chatbot_response(api_key: str, user_input: str, user_context: dict = None) -
     except Exception as e:
         return f"Chat unavailable: {e}"
 
-    # Build context-aware prompt
-    context_info = ""
+    # Build context-aware system prompt
+    system_prompt = """You are a knowledgeable fitness and nutrition coach specializing in Pakistani culture and lifestyle. 
+You provide practical, culturally appropriate advice about:
+- Traditional Pakistani foods and their nutritional value
+- Exercises suitable for Pakistani climate and available equipment
+- Halal dietary requirements
+- Local ingredients and cooking methods
+- Fitness tips for South Asian body types
+
+Be friendly, encouraging, and provide specific, actionable advice."""
+
     if user_context:
-        context_info = f"""
-You are a fitness and nutrition coach for Pakistani users. You have access to the user's profile:
-- Age: {user_context.get('age', 'N/A')}
-- Weight: {user_context.get('weight', 'N/A')} kg
-- Height: {user_context.get('height', 'N/A')} cm
+        system_prompt += f"""
+
+User Profile:
+- Age: {user_context.get('age', 'N/A')} years
+- Weight: {user_context.get('weight', 'N/A')} kg, Height: {user_context.get('height', 'N/A')} cm
 - Gender: {user_context.get('gender', 'N/A')}
 - BMI: {user_context.get('bmi', 'N/A')}
 - Fitness Goal: {user_context.get('fitness_goal', 'N/A')}
 - Diet Preference: {user_context.get('diet_pref', 'N/A')}
-
-Provide helpful, culturally appropriate advice for Pakistan. Suggest Pakistani foods, exercises suitable for local conditions, and practical tips.
+- Exercise Time: {user_context.get('exercise_time', 'N/A')} min/day
 """
 
-    full_prompt = context_info + f"\n\nUser Question: {user_input}\n\nProvide a helpful, detailed response:"
+    # Build messages array with chat history
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add chat history if available
+    if chat_history:
+        messages.extend(chat_history)
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_input})
 
     AuthErr = getattr(groq, "AuthenticationError", Exception)
     try:
         resp = client.chat.completions.create(
-            messages=[{"role": "user", "content": full_prompt}],
+            messages=messages,
             model="llama-3.3-70b-versatile",
             temperature=0.8,
+            max_tokens=1000,
         )
         try:
             return resp.choices[0].message.content
@@ -399,7 +520,19 @@ def main():
         
         with tab1:
             st.subheader("Your Personalized Workout Plan")
-            st.markdown(st.session_state['workout_plan'])
+            
+            # Try to parse and display as table
+            workout_df = parse_workout_to_table(st.session_state['workout_plan'])
+            
+            if workout_df is not None and not workout_df.empty:
+                st.dataframe(
+                    workout_df,
+                    use_container_width=True,
+                    height=400
+                )
+            else:
+                # Fallback to markdown if parsing fails
+                st.markdown(st.session_state['workout_plan'])
             
             # Download button for workout plan
             st.download_button(
@@ -411,7 +544,19 @@ def main():
         
         with tab2:
             st.subheader("Your Personalized Meal Plan")
-            st.markdown(st.session_state['meal_plan'])
+            
+            # Try to parse and display as table
+            meal_df = parse_meal_to_table(st.session_state['meal_plan'])
+            
+            if meal_df is not None and not meal_df.empty:
+                st.dataframe(
+                    meal_df,
+                    use_container_width=True,
+                    height=400
+                )
+            else:
+                # Fallback to markdown if parsing fails
+                st.markdown(st.session_state['meal_plan'])
             
             # Download button for meal plan
             st.download_button(
@@ -487,30 +632,69 @@ MEAL PLAN
                 use_container_width=True
             )
 
-    # Chatbot section
+    # Chatbot section with conversation history
     st.markdown("---")
     st.subheader("💬 Chat with AI Coach")
-    st.markdown("Ask questions about fitness, nutrition, exercises, or Pakistani foods!")
+    st.markdown("Have a conversation about fitness, nutrition, exercises, or Pakistani foods!")
     
+    # Initialize chat history in session state
+    if 'chat_history' not in st.session_state:
+        st.session_state['chat_history'] = []
+    
+    # Display chat history
+    if st.session_state['chat_history']:
+        st.markdown("### Conversation History")
+        chat_container = st.container()
+        with chat_container:
+            for i, message in enumerate(st.session_state['chat_history']):
+                if message['role'] == 'user':
+                    st.markdown(f"**👤 You:** {message['content']}")
+                elif message['role'] == 'assistant':
+                    st.markdown(f"**🤖 AI Coach:** {message['content']}")
+                    
+            st.markdown("---")
+    
+    # Chat input
     user_input = st.text_area(
-        "Your question:",
+        "Your message:",
         placeholder="E.g., 'Can I replace chicken with fish?', 'What exercises for back pain?', 'How to make daal more protein-rich?'",
-        height=100
+        height=100,
+        key="chat_input"
     )
     
-    col1, col2 = st.columns([1, 5])
+    col1, col2, col3 = st.columns([1, 1, 4])
     with col1:
         send_button = st.button("Send 📤", use_container_width=True)
+    with col2:
+        clear_button = st.button("Clear Chat 🗑️", use_container_width=True)
+    
+    if clear_button:
+        st.session_state['chat_history'] = []
+        st.rerun()
     
     if send_button:
-        if user_input:
+        if user_input and user_input.strip():
             with st.spinner("🤔 Thinking..."):
+                # Get response with chat history
                 response = chatbot_response(
                     api_key, 
-                    user_input, 
+                    user_input,
+                    st.session_state['chat_history'],
                     st.session_state.get('user_context', user_context)
                 )
-                st.markdown(f"**🤖 AI Coach:** {response}")
+                
+                # Add user message and assistant response to history
+                st.session_state['chat_history'].append({
+                    'role': 'user',
+                    'content': user_input
+                })
+                st.session_state['chat_history'].append({
+                    'role': 'assistant',
+                    'content': response
+                })
+                
+                # Rerun to display updated conversation
+                st.rerun()
         else:
             st.warning("⚠️ Please enter a message to send to the AI Coach.")
 
