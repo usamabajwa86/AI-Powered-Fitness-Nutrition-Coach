@@ -3,6 +3,8 @@ import streamlit as st
 import groq
 import pandas as pd
 from dotenv import load_dotenv
+from datetime import datetime
+import json
 
 
 # Load environment variables from .env file
@@ -42,36 +44,124 @@ def _get_groq_client(key: str):
 
     raise RuntimeError("Unable to initialize Groq client. Check installed groq SDK and API key.")
 
+# Helper function to calculate BMI and other health metrics
+def calculate_health_metrics(weight, height, age, gender):
+    """Calculate BMI, BMR, and daily calorie needs"""
+    height_m = height / 100  # convert cm to meters
+    bmi = weight / (height_m ** 2)
+    
+    # Calculate BMR using Mifflin-St Jeor Equation
+    if gender.lower() == "male":
+        bmr = (10 * weight) + (6.25 * height) - (5 * age) + 5
+    else:
+        bmr = (10 * weight) + (6.25 * height) - (5 * age) - 161
+    
+    # Calculate daily calorie needs (assuming moderate activity)
+    calories_maintenance = bmr * 1.55
+    
+    # BMI category
+    if bmi < 18.5:
+        bmi_category = "Underweight"
+        color = "blue"
+    elif 18.5 <= bmi < 25:
+        bmi_category = "Normal"
+        color = "green"
+    elif 25 <= bmi < 30:
+        bmi_category = "Overweight"
+        color = "orange"
+    else:
+        bmi_category = "Obese"
+        color = "red"
+    
+    return {
+        "bmi": round(bmi, 1),
+        "bmi_category": bmi_category,
+        "bmi_color": color,
+        "bmr": round(bmr, 0),
+        "calories_maintenance": round(calories_maintenance, 0)
+    }
+
 # Function to generate a personalized fitness and meal plan using Groq API
-def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fitness_goal, exercise_time):
+def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fitness_goal, exercise_time, health_metrics):
     try:
         client = _get_groq_client(api_key)
     except Exception as e:
         # propagate a concise error to the caller (Streamlit will show it)
         raise RuntimeError(str(e))
 
+    # Enhanced prompts with Pakistani context
     workout_prompt = f"""
-    Generate a detailed week-long workout plan for a {age}-year-old {gender} who wants to increase upper body width by {fitness_goal} and has {exercise_time} minutes daily for exercise. Focus on exercises that build shoulders, chest, and back muscles.
-    Please format the plan as follows:
-    Day 1: Workout Description
-    Day 2: Workout Description
-    Day 3: Workout Description
-    Day 4: Workout Description
-    Day 5: Workout Description
-    Day 6: Workout Description
-    Day 7: Workout Description
+    Generate a detailed week-long workout plan for a {age}-year-old {gender} from Pakistan who wants to achieve: {fitness_goal}.
+    
+    User Profile:
+    - Weight: {weight} kg
+    - Height: {height} cm
+    - BMI: {health_metrics['bmi']} ({health_metrics['bmi_category']})
+    - Available time: {exercise_time} minutes daily
+    - Fitness Goal: {fitness_goal}
+    
+    Create a comprehensive workout plan considering:
+    1. Limited access to gym equipment (provide home workout alternatives)
+    2. Hot weather conditions in Pakistan (suggest indoor/early morning workouts)
+    3. Progressive difficulty throughout the week
+    4. Proper warm-up and cool-down exercises
+    5. Rest days for recovery
+    
+    Format each day clearly with:
+    - Warm-up (5-10 minutes)
+    - Main exercises (with sets, reps, and rest periods)
+    - Cool-down and stretching
+    - Alternative exercises if equipment is not available
+    - Estimated calories burned
+    
+    Make it practical, achievable, and culturally appropriate for Pakistan.
     """
 
     meal_prompt = f"""
-    Generate a detailed week-long meal plan for a {diet_pref} diet to help a {age}-year-old {gender} increase upper body width with a focus on muscle gain.
-    Please format the plan as follows:
-    Day 1: Breakfast, Lunch, Dinner, Snacks
-    Day 2: Breakfast, Lunch, Dinner, Snacks
-    Day 3: Breakfast, Lunch, Dinner, Snacks
-    Day 4: Breakfast, Lunch, Dinner, Snacks
-    Day 5: Breakfast, Lunch, Dinner, Snacks
-    Day 6: Breakfast, Lunch, Dinner, Snacks
-    Day 7: Breakfast, Lunch, Dinner, Snacks
+    Generate a detailed week-long meal plan for a {age}-year-old {gender} from Pakistan following a {diet_pref} diet.
+    
+    User Profile:
+    - Weight: {weight} kg, Height: {height} cm
+    - BMI: {health_metrics['bmi']} ({health_metrics['bmi_category']})
+    - Daily calorie target: ~{health_metrics['calories_maintenance']} kcal (for maintenance)
+    - Fitness Goal: {fitness_goal}
+    - Diet Preference: {diet_pref}
+    
+    Create authentic Pakistani meal plans with:
+    
+    1. TRADITIONAL PAKISTANI FOODS:
+    - Breakfast: Paratha, eggs, daal, halwa puri, nihari, channay, lassi, doodh patti chai
+    - Lunch: Roti/naan with saalan (chicken karahi, mutton korma, daal, biryani, pulao)
+    - Dinner: Similar to lunch but lighter portions
+    - Snacks: Fruit chaat, samosas, pakoras, nuts, dates, roasted chana
+    
+    2. NUTRITIONAL BALANCE:
+    - Include protein sources (chicken, mutton, fish, daal, eggs, dairy)
+    - Complex carbs (brown rice, whole wheat roti, oats)
+    - Healthy fats (desi ghee in moderation, nuts, olive oil)
+    - Fresh vegetables and seasonal Pakistani fruits
+    
+    3. CULTURAL CONSIDERATIONS:
+    - All foods must be Halal
+    - Use common Pakistani spices and cooking methods
+    - Suggest locally available ingredients
+    - Consider meal timing (breakfast, lunch, evening chai, dinner)
+    - Include hydration tips for Pakistani climate
+    
+    4. PORTION CONTROL:
+    - Specify serving sizes (rotis, cups, grams)
+    - Calorie estimates for each meal
+    - Total daily calorie count
+    
+    For each day provide:
+    - Sehri/Breakfast (6-8 AM)
+    - Mid-morning snack (optional)
+    - Lunch (1-2 PM)
+    - Evening Chai/Snack (5-6 PM)
+    - Dinner (8-9 PM)
+    
+    Adjust portions and recipes based on the fitness goal: {fitness_goal}
+    Make it delicious, practical, and aligned with Pakistani eating habits!
     """
 
     # Call the chat completion API and handle common errors
@@ -79,12 +169,14 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     try:
         workout_plan = client.chat.completions.create(
             messages=[{"role": "user", "content": workout_prompt}],
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
+            temperature=0.7,
         )
 
         meal_plan = client.chat.completions.create(
             messages=[{"role": "user", "content": meal_prompt}],
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
+            temperature=0.7,
         )
     except AuthErr:
         raise RuntimeError("Authentication failed: invalid or expired Groq API key. Rotate the key and update your environment.")
@@ -107,8 +199,8 @@ def generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fi
     return w, m
 
 
-def chatbot_response(api_key: str, user_input: str) -> str:
-    """Simple chatbot fallback using the same Groq chat completions endpoint."""
+def chatbot_response(api_key: str, user_input: str, user_context: dict = None) -> str:
+    """Enhanced chatbot with context awareness about user profile and generated plans."""
     if not user_input:
         return "Please enter a message."
     try:
@@ -116,11 +208,30 @@ def chatbot_response(api_key: str, user_input: str) -> str:
     except Exception as e:
         return f"Chat unavailable: {e}"
 
+    # Build context-aware prompt
+    context_info = ""
+    if user_context:
+        context_info = f"""
+You are a fitness and nutrition coach for Pakistani users. You have access to the user's profile:
+- Age: {user_context.get('age', 'N/A')}
+- Weight: {user_context.get('weight', 'N/A')} kg
+- Height: {user_context.get('height', 'N/A')} cm
+- Gender: {user_context.get('gender', 'N/A')}
+- BMI: {user_context.get('bmi', 'N/A')}
+- Fitness Goal: {user_context.get('fitness_goal', 'N/A')}
+- Diet Preference: {user_context.get('diet_pref', 'N/A')}
+
+Provide helpful, culturally appropriate advice for Pakistan. Suggest Pakistani foods, exercises suitable for local conditions, and practical tips.
+"""
+
+    full_prompt = context_info + f"\n\nUser Question: {user_input}\n\nProvide a helpful, detailed response:"
+
     AuthErr = getattr(groq, "AuthenticationError", Exception)
     try:
         resp = client.chat.completions.create(
-            messages=[{"role": "user", "content": user_input}],
-            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": full_prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.8,
         )
         try:
             return resp.choices[0].message.content
@@ -133,6 +244,13 @@ def chatbot_response(api_key: str, user_input: str) -> str:
 
 # Streamlit app
 def main():
+    st.set_page_config(
+        page_title="AI Fitness & Nutrition Coach",
+        page_icon="💪",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
     st.markdown(
         """
         <style>
@@ -141,6 +259,7 @@ def main():
             color: #FF6347;
             text-align: center;
             margin-bottom: 0.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
         }
         .description {
             font-size: 1.2em;
@@ -148,14 +267,17 @@ def main():
             text-align: center;
             margin-bottom: 2em;
         }
-        .css-1d391kg {
-            background-color: #2E8B57 !important;
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+            margin: 10px 0;
         }
-        .css-1cpxqw2 {
-            color: #FFFFFF !important;
-        }
-        .css-1n76uvr, .css-7jyd01, .css-vfskoc, .css-1ktcvv5 { 
-            color: #2E8B57 !important;
+        .stDownloadButton button {
+            background-color: #2E8B57;
+            color: white;
         }
         </style>
         """, unsafe_allow_html=True
@@ -173,44 +295,224 @@ def main():
 
     st.markdown(
         """
-        <div class="main-title">AI-Powered Fitness & Nutrition Coach</div>
+        <div class="main-title">🇵🇰 AI-Powered Fitness & Nutrition Coach</div>
         <div class="description">
-           Welcome to the AI-Powered Fitness & Nutrition Coach, your personalized guide to achieving your fitness goals. This innovative application leverages advanced AI technology to deliver customized workout and meal plans tailored to your unique needs.
+           Your personalized Pakistani fitness and nutrition guide. Get customized workout plans and authentic desi meal recommendations tailored to your goals! 🏋️‍♂️🥘
         </div>
         """, unsafe_allow_html=True
     )
 
-    st.sidebar.header("Enter Your Details")
+    st.sidebar.header("📋 Enter Your Details")
     
-    age = st.sidebar.number_input("Age", min_value=1, max_value=100, value=25)
-    weight = st.sidebar.number_input("Weight (kg)", min_value=20, max_value=200, value=70)
-    height = st.sidebar.number_input("Height (cm)", min_value=100, max_value=250, value=170)
+    # User inputs
+    age = st.sidebar.number_input("Age", min_value=15, max_value=100, value=25, help="Your current age")
+    weight = st.sidebar.number_input("Weight (kg)", min_value=30, max_value=200, value=70, help="Your current weight in kilograms")
+    height = st.sidebar.number_input("Height (cm)", min_value=120, max_value=250, value=170, help="Your height in centimeters")
     gender = st.sidebar.selectbox("Gender", ["Male", "Female", "Other"])
-    diet_pref = st.sidebar.selectbox("Diet Preferences", ["Omnivore", "Vegetarian", "Vegan", "Keto", "Paleo"])
-    fitness_goal = st.sidebar.selectbox("Fitness Goal", ["Increase Upper Body Width", "Weight Loss", "Muscle Gain", "Maintenance", "Endurance", "Flexibility"])
-    exercise_time = st.sidebar.slider("Exercise Time (minutes per day)", min_value=10, max_value=120, value=60)
+    
+    # Calculate health metrics
+    health_metrics = calculate_health_metrics(weight, height, age, gender)
+    
+    # Display health metrics in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📊 Your Health Metrics")
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.metric("BMI", f"{health_metrics['bmi']}")
+        st.caption(f"Status: {health_metrics['bmi_category']}")
+    with col2:
+        st.metric("BMR", f"{int(health_metrics['bmr'])}")
+        st.caption("Base Metabolic Rate")
+    
+    st.sidebar.metric("Daily Calories", f"{int(health_metrics['calories_maintenance'])}", help="For maintenance")
+    
+    st.sidebar.markdown("---")
+    
+    # Diet and fitness preferences
+    diet_pref = st.sidebar.selectbox(
+        "🍽️ Diet Preferences", 
+        ["Omnivore (Non-Veg)", "Vegetarian", "Vegan", "Keto", "High Protein", "Balanced"],
+        help="Choose your dietary preference"
+    )
+    
+    fitness_goal = st.sidebar.selectbox(
+        "🎯 Fitness Goal", 
+        ["Weight Loss", "Muscle Gain", "Increase Upper Body Width", "General Fitness", "Endurance", "Flexibility & Mobility", "Maintenance"],
+        help="What do you want to achieve?"
+    )
+    
+    exercise_time = st.sidebar.slider(
+        "⏱️ Daily Exercise Time (minutes)", 
+        min_value=15, 
+        max_value=180, 
+        value=45, 
+        step=15,
+        help="How much time can you dedicate daily?"
+    )
+    
+    # Store user context for chatbot
+    user_context = {
+        'age': age,
+        'weight': weight,
+        'height': height,
+        'gender': gender,
+        'bmi': health_metrics['bmi'],
+        'fitness_goal': fitness_goal,
+        'diet_pref': diet_pref,
+        'exercise_time': exercise_time
+    }
 
-    if st.sidebar.button("Generate Plan"):
+    
+    st.sidebar.markdown("---")
+    generate_button = st.sidebar.button("🚀 Generate My Plan", type="primary", use_container_width=True)
+
+    if generate_button:
         if api_key:
-            with st.spinner('Generating your personalized fitness and meal plan...'):
-                workout_plan, meal_plan = generate_plans_with_groq(api_key, age, weight, height, gender, diet_pref, fitness_goal, exercise_time)
-                
-                # Display the raw outputs
-                st.subheader("Generated Workout Plan:")
-                st.text(workout_plan)
+            with st.spinner('🔮 Generating your personalized fitness and meal plan...'):
+                try:
+                    workout_plan, meal_plan = generate_plans_with_groq(
+                        api_key, age, weight, height, gender, diet_pref, 
+                        fitness_goal, exercise_time, health_metrics
+                    )
+                    
+                    # Store in session state
+                    st.session_state['workout_plan'] = workout_plan
+                    st.session_state['meal_plan'] = meal_plan
+                    st.session_state['user_context'] = user_context
+                    st.session_state['generation_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    st.success("✅ Your personalized plans are ready!")
+                    
+                except Exception as e:
+                    st.error(f"❌ Error generating plans: {str(e)}")
+        else:
+            st.error("⚠️ API key not found. Please configure your Groq API key.")
+    
+    # Display generated plans if they exist
+    if 'workout_plan' in st.session_state and 'meal_plan' in st.session_state:
+        
+        st.markdown("---")
+        
+        # Create tabs for better organization
+        tab1, tab2, tab3 = st.tabs(["💪 Workout Plan", "🥘 Meal Plan", "📊 Summary"])
+        
+        with tab1:
+            st.subheader("Your Personalized Workout Plan")
+            st.markdown(st.session_state['workout_plan'])
+            
+            # Download button for workout plan
+            st.download_button(
+                label="📥 Download Workout Plan",
+                data=st.session_state['workout_plan'],
+                file_name=f"workout_plan_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain"
+            )
+        
+        with tab2:
+            st.subheader("Your Personalized Meal Plan")
+            st.markdown(st.session_state['meal_plan'])
+            
+            # Download button for meal plan
+            st.download_button(
+                label="📥 Download Meal Plan",
+                data=st.session_state['meal_plan'],
+                file_name=f"meal_plan_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain"
+            )
+        
+        with tab3:
+            st.subheader("📊 Your Profile Summary")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown(f"""
+                **Personal Info**
+                - Age: {age} years
+                - Weight: {weight} kg
+                - Height: {height} cm
+                - Gender: {gender}
+                """)
+            
+            with col2:
+                st.markdown(f"""
+                **Health Metrics**
+                - BMI: {health_metrics['bmi']} ({health_metrics['bmi_category']})
+                - BMR: {int(health_metrics['bmr'])} kcal/day
+                - Daily Calories: {int(health_metrics['calories_maintenance'])} kcal
+                """)
+            
+            with col3:
+                st.markdown(f"""
+                **Goals & Preferences**
+                - Goal: {fitness_goal}
+                - Diet: {diet_pref}
+                - Exercise Time: {exercise_time} min/day
+                """)
+            
+            st.info(f"📅 Plans generated on: {st.session_state.get('generation_time', 'N/A')}")
+            
+            # Download combined plan
+            combined_plan = f"""
+AI-POWERED FITNESS & NUTRITION COACH - PERSONALIZED PLAN
+Generated: {st.session_state.get('generation_time', 'N/A')}
 
-                st.subheader("Generated Meal Plan:")
-                st.text(meal_plan)
+{'='*70}
+PROFILE SUMMARY
+{'='*70}
+Age: {age} years | Weight: {weight} kg | Height: {height} cm | Gender: {gender}
+BMI: {health_metrics['bmi']} ({health_metrics['bmi_category']})
+BMR: {int(health_metrics['bmr'])} kcal/day | Daily Calories: {int(health_metrics['calories_maintenance'])} kcal
+Fitness Goal: {fitness_goal}
+Diet Preference: {diet_pref}
+Exercise Time: {exercise_time} minutes/day
+
+{'='*70}
+WORKOUT PLAN
+{'='*70}
+{st.session_state['workout_plan']}
+
+{'='*70}
+MEAL PLAN
+{'='*70}
+{st.session_state['meal_plan']}
+"""
+            
+            st.download_button(
+                label="📥 Download Complete Plan (Workout + Meal)",
+                data=combined_plan,
+                file_name=f"complete_fitness_plan_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
 
     # Chatbot section
-    st.subheader("Chat with the AI Coach")
-    user_input = st.text_area("If you have any questions or need further customization, ask here:")
-    if st.button("Send"):
+    st.markdown("---")
+    st.subheader("💬 Chat with AI Coach")
+    st.markdown("Ask questions about fitness, nutrition, exercises, or Pakistani foods!")
+    
+    user_input = st.text_area(
+        "Your question:",
+        placeholder="E.g., 'Can I replace chicken with fish?', 'What exercises for back pain?', 'How to make daal more protein-rich?'",
+        height=100
+    )
+    
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        send_button = st.button("Send 📤", use_container_width=True)
+    
+    if send_button:
         if user_input:
-            response = chatbot_response(api_key, user_input)
-            st.markdown(f"*AI Coach:* {response}")
+            with st.spinner("🤔 Thinking..."):
+                response = chatbot_response(
+                    api_key, 
+                    user_input, 
+                    st.session_state.get('user_context', user_context)
+                )
+                st.markdown(f"**🤖 AI Coach:** {response}")
         else:
-            st.error("Please enter a message to send to the AI Coach.")
+            st.warning("⚠️ Please enter a message to send to the AI Coach.")
 
 if __name__ == "__main__":
     main()
